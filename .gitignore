@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+*.manifest
+
+# Local config (tu sinh theo may)
+network_monitor_config.json
+
+# Bundle tam
+files.zip
