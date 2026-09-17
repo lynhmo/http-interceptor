@@ -493,7 +493,10 @@ class NetworkMonitorApp:
             self.base_status = f"Forward proxy dang lang nghe 127.0.0.1:{listeners[0][0]} ..."
             subtitle = "forward proxy"
         self.root.title(f"Network Monitor [{subtitle}]")
-        self.root.geometry("1150x650")
+        self.root.geometry("1200x700")
+        set_titlebar_dark(self.root, self.dark_mode)
+        # Re-apply khi window hien that (DWM co the bo qua luc chua map)
+        self.root.after(500, lambda: set_titlebar_dark(self.root, self.dark_mode))
 
         self.data_queue: "queue.Queue" = queue.Queue(maxsize=5000)
         self.all_items = []
@@ -512,44 +515,89 @@ class NetworkMonitorApp:
 
     # ---------------- Mapping / title / status ----------------
     def _refresh_title_status(self):
+        for w in self.pill_frame.winfo_children():
+            w.destroy()
+        dot_color = "#16a34a" if not self.dark_mode else "#4ade80"
         if self.mode == "reverse":
-            mapping_txt = " | ".join(f"127.0.0.1:{p} -> {t}" for p, t in self.listeners)
-            self.base_status = f"Reverse proxy: {mapping_txt}"
+            for p, t in self.listeners:
+                ttk.Label(self.pill_frame, text="●", foreground=dot_color).pack(side=tk.LEFT)
+                ttk.Label(self.pill_frame, text=f"  {p} → {t}  ",
+                          style="Pill.TLabel").pack(side=tk.LEFT, padx=(0, 8))
             subtitle = "reverse -> " + "; ".join(f"{p} -> {t}" for p, t in self.listeners)
         else:
-            self.base_status = f"Forward proxy dang lang nghe 127.0.0.1:{self.listeners[0][0]} ..."
+            ttk.Label(self.pill_frame, text="●", foreground=dot_color).pack(side=tk.LEFT)
+            ttk.Label(self.pill_frame, text=f"  forward proxy :{self.listeners[0][0]}  ",
+                      style="Pill.TLabel").pack(side=tk.LEFT)
             subtitle = "forward proxy"
         self.root.title(f"Network Monitor [{subtitle}]")
-        count_txt = f"Da bat {len(self.all_items)} request"
-        self.status_var.set(f"{count_txt} | {self.base_status}")
+        self.mode_var.set("reverse" if self.mode == "reverse" else "forward")
+        self._update_count()
 
     # ---------------- UI layout ----------------
     def _build_ui(self):
-        toolbar = ttk.Frame(self.root)
-        toolbar.pack(side=tk.TOP, fill=tk.X, padx=6, pady=4)
+        # Header: tieu de + pills ket noi + actions
+        header = ttk.Frame(self.root)
+        header.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(10, 2))
+        ttk.Label(header, text="Network Monitor",
+                  font=("Segoe UI", 13, "bold")).pack(side=tk.LEFT)
+        self.pill_frame = ttk.Frame(header)
+        self.pill_frame.pack(side=tk.LEFT, padx=(16, 0))
+        actions = ttk.Frame(header)
+        actions.pack(side=tk.RIGHT)
+        if self.mode == "reverse":
+            ttk.Button(actions, text="Backend / Port",
+                       command=self._open_settings).pack(side=tk.LEFT, padx=(0, 8))
+        self.dark_var = tk.BooleanVar(value=self.dark_mode)
+        ttk.Checkbutton(actions, text="Dark", variable=self.dark_var,
+                        command=self._on_dark_toggle).pack(side=tk.LEFT)
 
-        ttk.Label(toolbar, text="Loc URL:").pack(side=tk.LEFT)
+        # Filter bar: search + chips + actions list
+        fbar = ttk.Frame(self.root)
+        fbar.pack(side=tk.TOP, fill=tk.X, padx=12, pady=(6, 6))
         self.filter_var = tk.StringVar()
         self.filter_var.trace_add("write", lambda *_: self._apply_filter())
-        ttk.Entry(toolbar, textvariable=self.filter_var, width=40).pack(side=tk.LEFT, padx=4)
-
-        ttk.Button(toolbar, text="Xoa danh sach", command=self._clear_all).pack(side=tk.LEFT, padx=8)
-        ttk.Button(toolbar, text="Copy as cURL", command=self._copy_curl).pack(side=tk.LEFT, padx=8)
+        self.filter_entry = ttk.Entry(fbar, textvariable=self.filter_var, width=34)
+        self.filter_entry.pack(side=tk.LEFT)
+        self._ph_text = "Filter by URL or method..."
+        self._ph_shown = True
+        self.filter_entry.insert(0, self._ph_text)
+        try:
+            self.filter_entry.configure(foreground=self._muted_color_static(self.dark_mode))
+        except Exception:
+            pass
+        self.filter_entry.bind("<FocusIn>", self._on_search_focus_in)
+        self.filter_entry.bind("<FocusOut>", self._on_search_focus_out)
+        chips = ttk.Frame(fbar)
+        chips.pack(side=tk.LEFT, padx=(10, 0))
+        self.chip_buttons = {}
+        for name in ("All", "GET", "POST", "PUT", "DELETE", "Errors"):
+            btn = ttk.Button(chips, text=name, width=7,
+                             command=lambda n=name: self._set_chip(n))
+            btn.pack(side=tk.LEFT, padx=(0, 4))
+            self.chip_buttons[name] = btn
+        self._set_chip("All", refresh=False)
+        list_actions = ttk.Frame(fbar)
+        list_actions.pack(side=tk.RIGHT)
         self.follow_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(toolbar, text="Follow", variable=self.follow_var,
-                        command=self._on_follow_toggle).pack(side=tk.LEFT, padx=8)
-        self.dark_var = tk.BooleanVar(value=self.dark_mode)
-        ttk.Checkbutton(toolbar, text="Dark mode", variable=self.dark_var,
-                        command=self._on_dark_toggle).pack(side=tk.LEFT, padx=8)
-
-        if self.mode == "reverse":
-            ttk.Button(toolbar, text="Doi backend/port", command=self._open_settings).pack(side=tk.LEFT, padx=8)
+        ttk.Checkbutton(list_actions, text="Follow", variable=self.follow_var,
+                        command=self._on_follow_toggle).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(list_actions, text="Copy cURL",
+                   command=self._copy_curl).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(list_actions, text="Clear", command=self._clear_all).pack(side=tk.LEFT)
 
         self.status_var = tk.StringVar(value="Dang khoi dong...")
-        ttk.Label(toolbar, textvariable=self.status_var, foreground="gray").pack(side=tk.RIGHT)
+        self.mode_var = tk.StringVar(value="")
+        self.method_filter = "ALL"
+
+        statusbar = ttk.Frame(self.root)
+        statusbar.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=(0, 8))
+        ttk.Label(statusbar, textvariable=self.status_var,
+                  style="Muted.TLabel").pack(side=tk.LEFT)
+        ttk.Label(statusbar, textvariable=self.mode_var,
+                  style="Muted.TLabel").pack(side=tk.RIGHT)
 
         main_pane = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
-        main_pane.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        main_pane.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
 
         list_frame = ttk.Frame(main_pane)
         columns = ("time", "method", "status", "duration", "url")
@@ -617,7 +665,9 @@ class NetworkMonitorApp:
             bar = ttk.Frame(frame)
             bar.pack(side=tk.TOP, fill=tk.X)
             btn = ttk.Button(bar, text="Format JSON")
-            btn.pack(side=tk.LEFT, padx=2, pady=2)
+            btn.pack(side=tk.LEFT, padx=(2, 4), pady=2)
+            copy_btn = ttk.Button(bar, text="Copy")
+            copy_btn.pack(side=tk.LEFT, padx=(0, 2), pady=2)
         text = tk.Text(frame, wrap=tk.WORD, font=("Consolas", 10))
         vsb = ttk.Scrollbar(frame, orient="vertical", command=text.yview)
         text.configure(yscrollcommand=vsb.set, state=tk.DISABLED)
@@ -625,8 +675,17 @@ class NetworkMonitorApp:
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         if with_format:
             btn.configure(command=lambda: self._format_json_text(text))
+            copy_btn.configure(command=lambda: self._copy_widget_text(text))
         self.notebook.add(frame, text=title)
         return text
+
+    def _copy_widget_text(self, widget: tk.Text):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(widget.get("1.0", tk.END).strip())
+            self.root.update()
+        except Exception as e:
+            messagebox.showerror("Copy", f"Khong copy duoc: {e}")
 
     @staticmethod
     def _format_json_text(widget: tk.Text):
@@ -651,34 +710,31 @@ class NetworkMonitorApp:
         "btn": "#ffffff", "btn_fg": "#09090b", "btn_hover": "#f4f4f5",
         "tree": "#ffffff", "head": "#fafafa", "head_hover": "#f4f4f5",
         "sel_bg": "#e4e4e7", "sel_fg": "#09090b",
+        "tab_sel": "#ffffff",
         "scroll": "#d4d4d8",
         "text_bg": "#ffffff", "text_fg": "#09090b",
         "text_sel_bg": "#e4e4e7", "text_sel_fg": "#09090b",
         "error_bg": "#fef2f2", "pending_fg": "#a1a1aa",
         "primary": "#18181b", "primary_fg": "#fafafa", "primary_hover": "#27272a",
-        "methods": {"GET": "#16a34a", "POST": "#2563eb", "PUT": "#9333ea",
-                    "PATCH": "#ea580c", "DELETE": "#dc2626"},
-        "method_other": "#71717a",
     }
     DARK = {
-        "bg": "#09090b", "fg": "#fafafa", "muted_fg": "#a1a1aa",
-        "field": "#09090b", "border": "#27272a",
-        "btn": "#09090b", "btn_fg": "#fafafa", "btn_hover": "#27272a",
-        "tree": "#09090b", "head": "#101012", "head_hover": "#27272a",
-        "sel_bg": "#27272a", "sel_fg": "#fafafa",
-        "scroll": "#3f3f46",
-        "text_bg": "#09090b", "text_fg": "#fafafa",
-        "text_sel_bg": "#27272a", "text_sel_fg": "#fafafa",
-        "error_bg": "#450a0a", "error_fg": "#fca5a5", "pending_fg": "#71717a",
-        "primary": "#fafafa", "primary_fg": "#09090b", "primary_hover": "#e4e4e7",
-        "methods": {"GET": "#4ade80", "POST": "#60a5fa", "PUT": "#c084fc",
-                    "PATCH": "#fb923c", "DELETE": "#f87171"},
-        "method_other": "#a1a1aa",
+        "bg": "#27272a", "fg": "#fafafa", "muted_fg": "#b9b9c0",
+        "field": "#27272a", "border": "#3f3f46",
+        "btn": "#27272a", "btn_fg": "#fafafa", "btn_hover": "#3a3a40",
+        "tree": "#27272a", "head": "#2e2e33", "head_hover": "#3a3a40",
+        "sel_bg": "#3f3f46", "sel_fg": "#fafafa",
+        "tab_sel": "#323237",
+        "scroll": "#71717a",
+        "text_bg": "#27272a", "text_fg": "#fafafa",
+        "text_sel_bg": "#3f3f46", "text_sel_fg": "#fafafa",
+        "error_bg": "#4c2323", "error_fg": "#fecaca", "pending_fg": "#a1a1aa",
+        "primary": "#fafafa", "primary_fg": "#18181b", "primary_hover": "#e4e4e7",
     }
 
     def _on_dark_toggle(self):
         self.dark_mode = bool(self.dark_var.get())
         self._apply_theme_mode()
+        set_titlebar_dark(self.root, self.dark_mode)
         try:
             save_config({
                 "port": self.listeners[0][0],
@@ -701,6 +757,8 @@ class NetworkMonitorApp:
             style.configure("TFrame", background=t["bg"])
             style.configure("TLabel", background=t["bg"], foreground=t["fg"])
             style.configure("Muted.TLabel", background=t["bg"], foreground=t["muted_fg"])
+            style.configure("Pill.TLabel", background=t["btn_hover"], foreground=t["fg"],
+                            padding=(4, 3), font=("Segoe UI", 9))
             style.configure("TButton", background=t["btn"], foreground=t["btn_fg"],
                             bordercolor=t["border"], lightcolor=t["btn"], darkcolor=t["border"])
             style.map("TButton",
@@ -726,11 +784,18 @@ class NetworkMonitorApp:
                             font=("Segoe UI", 9, "bold"))
             style.map("Treeview.Heading", background=[("active", t["head_hover"])])
             style.configure("TNotebook", background=t["bg"], borderwidth=0)
+            # Tab phang, mem: bo vien 3D bang cach dong mau vien theo nen,
+            # tab active noi len 1 tone thay vi phong to/bien dang
             style.configure("TNotebook.Tab", background=t["bg"],
-                            foreground=t["muted_fg"], padding=(12, 6))
+                            foreground=t["muted_fg"], padding=(10, 4),
+                            bordercolor=t["bg"], lightcolor=t["bg"],
+                            darkcolor=t["bg"], focuscolor=t["bg"])
             style.map("TNotebook.Tab",
-                      background=[("selected", t["bg"])],
-                      foreground=[("selected", t["fg"])])
+                      background=[("selected", t["tab_sel"])],
+                      foreground=[("selected", t["fg"])],
+                      bordercolor=[("selected", t["tab_sel"])],
+                      lightcolor=[("selected", t["tab_sel"])],
+                      darkcolor=[("selected", t["tab_sel"])])
             style.configure("TPanedwindow", background=t["bg"])
             for sc in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
                 style.configure(sc, background=t["scroll"], troughcolor=t["bg"],
@@ -755,13 +820,9 @@ class NetworkMonitorApp:
             self.tree.tag_configure("pending", foreground=t["pending_fg"])
         except Exception:
             pass
-        for m, color in t["methods"].items():
-            try:
-                self.tree.tag_configure(f"m{m}", foreground=color)
-            except Exception:
-                pass
         try:
-            self.tree.tag_configure("mOTHER", foreground=t["method_other"])
+            if getattr(self, "_ph_shown", False):
+                self.filter_entry.configure(foreground=t["muted_fg"])
         except Exception:
             pass
 
@@ -898,6 +959,7 @@ class NetworkMonitorApp:
         x = self.root.winfo_x() + (self.root.winfo_width() - dlg.winfo_reqwidth()) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - dlg.winfo_reqheight()) // 3
         dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+        set_titlebar_dark(dlg, self.dark_mode)
         spin.focus_set()
         spin.select_range(0, "end")
 
@@ -1005,12 +1067,12 @@ class NetworkMonitorApp:
 
     def _update_count(self, extra: str = ""):
         pending = len(self.pending_item_by_id)
-        count_txt = f"Da bat {len(self.all_items)} request"
+        count_txt = f"{len(self.all_items)} requests"
         if pending:
-            count_txt += f" ({pending} dang goi...)"
+            count_txt += f"  •  {pending} in flight..."
         if extra:
-            count_txt += f" {extra}"
-        self.status_var.set(f"{count_txt} | {self.base_status}")
+            count_txt += f"  {extra}"
+        self.status_var.set(count_txt)
 
     @staticmethod
     def _is_error(item: dict) -> bool:
@@ -1019,11 +1081,6 @@ class NetworkMonitorApp:
         if isinstance(status, int):
             return status >= 400
         return status in ("ERROR", "-")
-
-    @staticmethod
-    def _method_tag(method) -> str:
-        """Tag mau theo method (GET/POST/..., con lai mOTHER)."""
-        return f"m{method}" if method in ("GET", "POST", "PUT", "PATCH", "DELETE") else "mOTHER"
 
     def _insert_row(self, item: dict):
         iid = str(item["id"])
@@ -1041,8 +1098,7 @@ class NetworkMonitorApp:
         if pending:
             tags: tuple = ("pending",)
         else:
-            mtag = self._method_tag(item.get("method"))
-            tags = (mtag, "error") if self._is_error(item) else (mtag,)
+            tags = ("error",) if self._is_error(item) else ()
         self.tree.insert(
             "", tk.END, iid=iid,
             values=(item["time"], item["method"], status, dur, item["url"]),
@@ -1093,13 +1149,59 @@ class NetworkMonitorApp:
             self.follow_var.set(False)
 
     # ---------------- Filter ----------------
+    def _set_chip(self, name: str, refresh: bool = True):
+        self.method_filter = "ALL" if name == "All" else ("ERRORS" if name == "Errors" else name)
+        for n, btn in self.chip_buttons.items():
+            try:
+                btn.configure(style="Primary.TButton" if n == name else "TButton")
+            except Exception:
+                pass
+        if refresh:
+            self._apply_filter()
+
+    def _on_search_focus_in(self, _event=None):
+        if self._ph_shown:
+            self._ph_shown = False
+            self.filter_entry.delete(0, tk.END)
+            try:
+                self.filter_entry.configure(foreground="")
+            except Exception:
+                pass
+
+    def _on_search_focus_out(self, _event=None):
+        if not self.filter_var.get():
+            self._ph_shown = True
+            self.filter_entry.insert(0, self._ph_text)
+            try:
+                self.filter_entry.configure(foreground=self._muted_color())
+            except Exception:
+                pass
+
+    @staticmethod
+    def _muted_color_static(dark: bool) -> str:
+        return "#a1a1aa" if dark else "#71717a"
+
+    def _muted_color(self) -> str:
+        return self._muted_color_static(self.dark_mode)
+
     def _passes_filter(self, item: dict) -> bool:
+        mf = self.method_filter
+        if mf == "ERRORS":
+            if not self._is_error(item):
+                return False
+        elif mf != "ALL":
+            if item.get("method") != mf:
+                return False
+        if self._ph_shown:
+            return True
         needle = self.filter_var.get().strip().lower()
         if not needle:
             return True
-        return needle in item["url"].lower()
+        return needle in item["url"].lower() or needle in item.get("method", "").lower()
 
     def _apply_filter(self, silent: bool = False):
+        if not hasattr(self, "tree"):
+            return  # UI chua dung xong (trace cua search luc khoi tao)
         self.tree.delete(*self.tree.get_children())
         self.item_by_iid.clear()
         self.pending_by_iid.clear()
@@ -1209,6 +1311,39 @@ def _apply_theme(root: tk.Tk):
             style.theme_use("clam")
     except Exception:
         pass
+
+
+def set_titlebar_dark(window: tk.Tk | tk.Toplevel, dark: bool) -> bool:
+    """Doi mau title bar Windows theo theme app (den khi dark mode).
+    Tra ve True neu ap dung duoc. Chi co tac dung tren Windows 10/11
+    (can quyen goi DWM - Python Store ban sandbox co the bi chan)."""
+    try:
+        if sys.platform != "win32":
+            return False
+        import ctypes
+        from ctypes import wintypes
+        window.update_idletasks()
+        user32 = ctypes.windll.user32
+        # winfo_id() co the tra ve cua so con ben trong Tk -> lay top-level
+        # that de DWM chap nhan (goi truc tiep hay bi E_HANDLE)
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
+        val = ctypes.c_int(1 if dark else 0)
+        dwm = ctypes.windll.dwmapi
+        dwm.DwmSetWindowAttribute.argtypes = [wintypes.HWND, wintypes.DWORD,
+                                              wintypes.LPVOID, wintypes.DWORD]
+        dwm.DwmSetWindowAttribute.restype = ctypes.c_long
+        # 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (19 tren ban Win 10 cu)
+        for attr in (20, 19):
+            try:
+                if dwm.DwmSetWindowAttribute(hwnd, attr,
+                                             ctypes.byref(val),
+                                             ctypes.sizeof(val)) == 0:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
 
 
 def _parse_setup(targets_raw: str, port_raw: str, insecure: bool):
